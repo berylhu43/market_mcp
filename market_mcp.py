@@ -24,6 +24,7 @@ market_mcp — 用 Alpha Vantage 做市场数据的 MCP server
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +43,10 @@ AV_BASE = "https://www.alphavantage.co/query"
 # 注意:进程重启会清空(Claude Desktop 每次会话都会重新起这个进程)。
 _cache: dict[str, dict] = {}
 
+# 撞限流时的重试等待(秒):第一次立刻试,不行等 3 秒,再不行等 6 秒,都失败才报错。
+# 每分钟限额是短时的,等一下能恢复;每天 25 次的额度等也没用,所以重试次数很有限。
+_RETRY_BACKOFF = (3, 6)
+
 
 def _api_key() -> str:
     key = os.environ.get("ALPHAVANTAGE_API_KEY")
@@ -54,29 +59,39 @@ def _api_key() -> str:
 
 
 def _call_av(params: dict) -> dict:
-    """统一请求入口:带上 key、走缓存、并把 Alpha Vantage 的各种'非正常返回'翻译成清楚的报错。"""
+    """Single entry point for every Alpha Vantage call: attaches the API key,
+    uses the cache, and turns Alpha Vantage's various non-normal responses into
+    clear errors."""
     cache_key = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
     if cache_key in _cache:
         return _cache[cache_key]
-
-    query = urllib.parse.urlencode({**params, "apikey": _api_key()})
-    try:
-        with urllib.request.urlopen(f"{AV_BASE}?{query}", timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"failed to call Alpha Vantage: {e}") from e
-
-    # Alpha Vantage 不用 HTTP 错误码报错,而是在 JSON 里塞这几个字段:
-    if "Error Message" in data:
-        raise RuntimeError(f"Alpha Vantage error (bug in code): {data['Error Message']}")
-    if "Note" in data or "Information" in data:
-        raise RuntimeError(
-            "triggered Alpha Vantage rate limit (free tier allows ~25 calls/day, ~5 calls/minute)."
-            "wait a bit and try again, or reduce the number of stocks compared at once."
-        )
-
-    _cache[cache_key] = data
-    return data
+ 
+    # 撞限流就退避重试:先立刻试,失败则依次等 _RETRY_BACKOFF 里的秒数再试。
+    for wait in (0, *_RETRY_BACKOFF):
+        if wait:
+            time.sleep(wait)
+ 
+        query = urllib.parse.urlencode({**params, "apikey": _api_key()})
+        try:
+            with urllib.request.urlopen(f"{AV_BASE}?{query}", timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to reach Alpha Vantage: {e}") from e
+ 
+        # Alpha Vantage 不用 HTTP 错误码报错,而是在 JSON 里塞这几个字段:
+        if "Error Message" in data:  # 代码/ticker 写错之类,重试也没用,直接报错
+            raise RuntimeError(f"Alpha Vantage error (likely a bad symbol): {data['Error Message']}")
+        if "Note" in data or "Information" in data:  # 撞限流,进入下一轮等待后重试
+            continue
+ 
+        _cache[cache_key] = data
+        return data
+ 
+    # 几轮重试后还在限流:
+    raise RuntimeError(
+        "Hit Alpha Vantage's rate limit (free tier: ~25 calls/day, ~5/min) and "
+        "retries didn't clear it. Wait a bit and try again, or compare fewer symbols."
+    )
 
 
 def _fetch_overview(symbol: str) -> dict:
