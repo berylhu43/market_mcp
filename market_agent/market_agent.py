@@ -131,7 +131,7 @@ async def main(question: str):
     for msg in result["messages"]:
         msg.pretty_print()
 
-    print(result["messages"][-1].content)
+    # print(result["messages"][-1].content)
 
 
 if __name__ == "__main__":
