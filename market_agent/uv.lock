@@ -737,6 +737,7 @@ dependencies = [
     { name = "langchain-anthropic" },
     { name = "langchain-mcp-adapters" },
     { name = "langgraph" },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
@@ -745,6 +746,7 @@ requires-dist = [
     { name = "langchain-anthropic", specifier = ">=1.7.1" },
     { name = "langchain-mcp-adapters", specifier = ">=0.3.2" },
     { name = "langgraph", specifier = ">=1.2.11" },
+    { name = "python-dotenv", specifier = ">=1.2.3" },
 ]
 
 [[package]]

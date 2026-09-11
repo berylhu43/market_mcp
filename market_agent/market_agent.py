@@ -33,12 +33,16 @@ market_agent.py — 用 LangGraph 搭一个连 market_mcp 的最小 agent
 import asyncio
 import os
 import sys
+from dotenv import load_dotenv
 from pathlib import Path
 
 from langchain.chat_models import init_chat_model
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
+
+load_dotenv()  # 让 .env 里的环境变量生效,不然 uv run 时不会自动读
+
 
 # 用哪个模型,按你有权限的改。sonnet 便宜、够用。
 MODEL = os.environ.get("AGENT_MODEL", "anthropic:claude-sonnet-4-6")
@@ -84,7 +88,7 @@ async def build_agent():
                     "run",
                     "--directory", str(server_path),
                     "--with", "mcp[cli]==2.2.0",
-                    "mcp", "run", "market_mcp.py",
+                    "python", "market_mcp.py",
                 ],
                 # 子进程不一定继承你 shell 的环境变量,显式传 key 进去
                 "env": {"ALPHAVANTAGE_API_KEY": av_key},
@@ -124,8 +128,8 @@ async def main(question: str):
     )
 
     # 想看清每一步调了什么,把下面这段注释打开(这是 LangGraph 相对手写好调试的地方之一)
-    # for msg in result["messages"]:
-    #     msg.pretty_print()
+    for msg in result["messages"]:
+        msg.pretty_print()
 
     print(result["messages"][-1].content)
 
