@@ -1,0 +1,12 @@
+[project]
+name = "market-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=1.4.0",
+    "langchain-anthropic>=1.7.1",
+    "langchain-mcp-adapters>=0.3.2",
+    "langgraph>=1.2.11",
+]
