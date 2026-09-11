@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dotenv import load_dotenv
 from typing import Annotated
 
 from pydantic import Field
@@ -47,9 +48,11 @@ _cache: dict[str, dict] = {}
 # 每分钟限额是短时的,等一下能恢复;每天 25 次的额度等也没用,所以重试次数很有限。
 _RETRY_BACKOFF = (3, 6)
 
+load_dotenv()  # 让 .env 里的环境变量生效,不然 uv run 时不会自动读
+
 
 def _api_key() -> str:
-    key = os.environ.get("ALPHAVANTAGE_API_KEY")
+    key = os.getenv("ALPHAVANTAGE_API_KEY")
     if not key:
         raise RuntimeError(
             "No ALPHAVANTAGE_API_KEY set. Please pass it via "
