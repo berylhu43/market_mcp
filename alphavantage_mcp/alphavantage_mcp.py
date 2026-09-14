@@ -1,5 +1,5 @@
 """
-market_mcp — 用 Alpha Vantage 做市场数据的 MCP server
+alphavantage_mcp — 用 Alpha Vantage 做市场数据的 MCP server
 =====================================================
 主要结构：几个 tool + 一个 resource + 一个 prompt。
 
@@ -16,10 +16,10 @@ market_mcp — 用 Alpha Vantage 做市场数据的 MCP server
     pip install "mcp[cli]"
 
 本地调试(key 通过环境变量传,别写死在代码里):
-    ALPHAVANTAGE_API_KEY=你的key uv run mcp dev market_mcp.py
+    ALPHAVANTAGE_API_KEY=你的key uv run mcp dev alphavantage_mcp.py
 
 挂到 Claude Desktop(-v 把 key 作为环境变量传进去):
-    mcp install market_mcp.py -v ALPHAVANTAGE_API_KEY=你的key
+    mcp install alphavantage_mcp.py -v ALPHAVANTAGE_API_KEY=你的key
 """
 
 import json
@@ -35,7 +35,7 @@ from pydantic import Field
 
 from mcp.server.mcpserver import MCPServer
 
-mcp = MCPServer("market_mcp")
+mcp = MCPServer("alphavantage_mcp")
 
 AV_BASE = "https://www.alphavantage.co/query"
 
@@ -56,7 +56,7 @@ def _api_key() -> str:
     if not key:
         raise RuntimeError(
             "No ALPHAVANTAGE_API_KEY set. Please pass it via "
-            "`mcp install market_mcp.py -v ALPHAVANTAGE_API_KEY=yourkey`."
+            "`mcp install alphavantage_mcp.py -v ALPHAVANTAGE_API_KEY=yourkey`."
         )
     return key
 
@@ -191,6 +191,72 @@ def compare_symbols(
             f"  PE: {o.get('PERatio', '?')} | profit margin: {o.get('ProfitMargin', '?')}"
         )
     return "\n\n".join(rows)
+
+# --- TOOL:新闻与情绪(公司 + 主题两种查法) ---
+# Alpha Vantage 支持的 topic 取值(写在 description 里,模型才知道能填什么)
+NEWS_TOPICS = (
+    "blockchain, earnings, ipo, mergers_and_acquisitions, financial_markets, "
+    "economy_fiscal, economy_monetary, economy_macro, energy_transportation, "
+    "finance, life_sciences, manufacturing, real_estate, retail_wholesale, technology"
+)
+
+
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+def get_news(
+    tickers: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description="Optional list of tickers to get news for, e.g. ['NRGV','FLNC']. "
+            "Combine with topics to narrow further.",
+            max_length=5,
+        ),
+    ] = None,
+    topics: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description=f"Optional list of topics. Must be from: {NEWS_TOPICS}. "
+            "For energy storage / grid / utilities news use 'energy_transportation'.",
+            max_length=3,
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(default=8, description="How many articles to return (1-20)", ge=1, le=20),
+    ] = 8,
+) -> str:
+    """Get recent news headlines with sentiment for companies and/or topics.
+    Pass tickers for company news, topics for sector/theme news, or both together.
+    At least one of tickers or topics is required."""
+    if not tickers and not topics:
+        return "需要至少给一个 tickers 或 topics。例如 tickers=['NRGV'] 或 topics=['energy_transportation']。"
+ 
+    params = {"function": "NEWS_SENTIMENT", "limit": str(limit), "sort": "LATEST"}
+    if tickers:
+        params["tickers"] = ",".join(tickers)
+    if topics:
+        params["topics"] = ",".join(topics)
+ 
+    feed = _call_av(params).get("feed", [])
+    if not feed:
+        return "没有找到相关新闻。可以换个 ticker 或 topic 再试。"
+ 
+    items = []
+    for a in feed[:limit]:
+        # time_published 形如 20260911T083000,截成人读得懂的日期
+        raw_time = a.get("time_published", "")
+        date = f"{raw_time[:4]}-{raw_time[4:6]}-{raw_time[6:8]}" if len(raw_time) >= 8 else "?"
+        label = a.get("overall_sentiment_label", "?")
+        summary = (a.get("summary") or "")[:200]
+        items.append(
+            f"[{date}] {a.get('title', '?')}\n"
+            f"  来源: {a.get('source', '?')} | 情绪: {label}\n"
+            f"  {summary}\n"
+            f"  {a.get('url', '')}"
+        )
+    return "\n\n".join(items)
+ 
 
 
 # --- RESOURCE:关注列表(可编辑的背景上下文) ---
