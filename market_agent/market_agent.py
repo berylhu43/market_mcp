@@ -24,7 +24,7 @@ market_agent.py — 用 LangGraph 搭一个连 market_mcp 的最小 agent
 环境变量(见 .env.example):
     ANTHROPIC_API_KEY      给模型
     ALPHAVANTAGE_API_KEY   给 market_mcp(会传进它的子进程)
-    MARKET_MCP_DIR         可选,server 所在目录;不设就按上面的兄弟结构自动找
+    AV_MCP_DIR         可选,server 所在目录;不设就按上面的兄弟结构自动找
 
 运行:
     uv run python market_agent.py "帮我比一下 NEE、FSLR、ENPH"
@@ -49,11 +49,16 @@ MODEL = os.environ.get("AGENT_MODEL", "anthropic:claude-sonnet-4-6")
 
 # server 位置:优先读环境变量,没设就按"兄弟文件夹"结构找 ../market_mcp。
 # 不写死绝对路径,别人 clone 下来照结构放就能跑,换了结构设个环境变量即可。
-MARKET_MCP_DIR = os.environ.get(
-    "MARKET_MCP_DIR",
-    str(Path(__file__).resolve().parent.parent / "market_mcp"),
+AV_MCP_DIR = os.environ.get(
+    "AV_MCP_DIR",
+    str(Path(__file__).resolve().parent.parent / "alphavantage_mcp"),
 )
 
+# EIA server 放在 EIA_MCP 文件夹。
+EIA_MCP_DIR = os.environ.get(
+    "EIA_MCP_DIR", 
+    str(Path(__file__).resolve().parent.parent / "eia_mcp")
+)
 
 def _require_env(name: str) -> str:
     """把"忘了设环境变量"变成一句人能读懂的提示,而不是一坨 KeyError。"""
@@ -63,38 +68,57 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _stdio_server(directory: Path, script: str, env: dict) -> dict:
+    """拼一个 stdio server 的启动配置。两个 server 用同一套写法,抽出来别重复。
+ 
+    --directory 让 uv 去 server 自己的目录跑,不受 agent 环境影响。
+    --with 锁定子进程的 mcp 版本:agent 这边 adapter 依赖 mcp 1.x,
+    而两个 server 都需要 2.x,分开起就不打架。
+    """
+    return {
+        "transport": "stdio",
+        "command": "uv",
+        "args": [
+            "run",
+            "--directory", str(directory),
+            "--with", "mcp==2.2.0",
+            "python", script,
+        ],
+        # 子进程不一定继承你 shell 的环境变量,显式传 key 进去
+        "env": env,
+    }
+
+
 async def build_agent():
     anthropic_key = _require_env("ANTHROPIC_API_KEY")
     av_key = _require_env("ALPHAVANTAGE_API_KEY")
 
-    server_path = Path(MARKET_MCP_DIR)
-    if not (server_path / "market_mcp.py").exists():
+    server_path = Path(AV_MCP_DIR)
+    if not (server_path / "alphavantage_mcp.py").exists():
         sys.exit(
-            f"在 {server_path} 里找不到 market_mcp.py。\n"
-            "把 MARKET_MCP_DIR 设成 server 所在目录,或按兄弟文件夹结构摆放。"
+            f"在 {server_path} 里找不到 alphavantage_mcp.py。\n"
+            "把 AV_MCP_DIR 设成 server 所在目录,或按兄弟文件夹结构摆放。"
         )
 
-    # 1) 连 market_mcp(stdio 子进程),把它的 tool 自动转成 LangChain tool。
+    # 1) 连 MCP server(stdio 子进程),把它们的 tool 自动转成 LangChain tool。
     #    这一步替你做了手写时最烦的"给每个 MCP tool 包一层可调函数"。
-    client = MultiServerMCPClient(
-        {
-            "market": {
-                "transport": "stdio",
-                "command": "uv",
-                # --directory 让 uv 去 server 自己的目录跑,不受 agent 环境影响。
-                # --with 锁定子进程的 mcp 版本:agent 这边 adapter 依赖 mcp 1.x,
-                # 而 market_mcp 需要 2.x,分开起就不打架。
-                "args": [
-                    "run",
-                    "--directory", str(server_path),
-                    "--with", "mcp[cli]==2.2.0",
-                    "python", "market_mcp.py",
-                ],
-                # 子进程不一定继承你 shell 的环境变量,显式传 key 进去
-                "env": {"ALPHAVANTAGE_API_KEY": av_key},
-            }
-        }
-    )
+    #    MultiServerMCPClient 支持同时连多个 server —— 这里连了股票和 EIA 两个,
+    #    get_tools() 会把两边的 tool 合成一份清单交给模型,模型自己按需挑。
+    servers = {
+        "alphavantage": _stdio_server(
+            server_path, "alphavantage_mcp.py", {"ALPHAVANTAGE_API_KEY": av_key}
+        ),
+    }
+ 
+    # EIA 是可选的:没设 key 就只跑股票那部分,不让整个 agent 起不来
+    eia_key = os.environ.get("EIA_API_KEY")
+    eia_path = Path(EIA_MCP_DIR)
+    if eia_key and (eia_path / "eia_mcp.py").exists():
+        servers["eia"] = _stdio_server(eia_path, "eia_mcp.py", {"EIA_API_KEY": eia_key})
+    else:
+        print("(提示:没有 EIA_API_KEY 或找不到 eia_mcp.py,本次只加载股票 tool)")
+ 
+    client = MultiServerMCPClient(servers)
     tools = await client.get_tools()
 
     # 2) 绑定模型 + tools。bind_tools 就是把 tool 的 schema 交给模型,让它会 tool-calling。
