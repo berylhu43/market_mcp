@@ -1,5 +1,5 @@
 """
-market_agent.py — 用 LangGraph 搭一个连 market_mcp 的最小 agent
+market_agent.py — 用 LangGraph 搭一个连MCP server(股票 / EIA / 批发电价)的结构
 ================================================================
 目的:跟你手写过的 while-loop 做对照,看清 LangGraph 到底接管了哪几块。
 
@@ -12,10 +12,6 @@ market_agent.py — 用 LangGraph 搭一个连 market_mcp 的最小 agent
   你手动往 messages 里 append    →  add_messages reducer 自动累加(MessagesState 内建)
   你手动把 MCP tool 包成函数     →  MultiServerMCPClient 自动转成 LangChain tool
 
-目录结构假设(agent 和 server 是兄弟文件夹):
-    Desktop/
-    ├── market_mcp/     market_mcp.py 在这里
-    └── market_agent/   本文件在这里
 
 安装(在 market_agent/ 文件夹里):
     uv init && rm main.py
@@ -60,6 +56,12 @@ EIA_MCP_DIR = os.environ.get(
     str(Path(__file__).resolve().parent.parent / "eia_mcp")
 )
 
+# 批发电价(LMP)server。不需要 key,但依赖 gridstatus。
+WHOLESALE_MCP_DIR = os.environ.get(
+    "WHOLESALE_MCP_DIR",
+    str(Path(__file__).resolve().parent.parent / "wholesale_mcp"),
+)
+
 def _require_env(name: str) -> str:
     """把"忘了设环境变量"变成一句人能读懂的提示,而不是一坨 KeyError。"""
     value = os.environ.get(name)
@@ -85,7 +87,7 @@ def _stdio_server(directory: Path, script: str, env: dict) -> dict:
             "python", script,
         ],
         # 子进程不一定继承你 shell 的环境变量,显式传 key 进去
-        "env": env,
+        "env": {**os.environ, **env},
     }
 
 
@@ -116,8 +118,15 @@ async def build_agent():
     if eia_key and (eia_path / "eia_mcp.py").exists():
         servers["eia"] = _stdio_server(eia_path, "eia_mcp.py", {"EIA_API_KEY": eia_key})
     else:
-        print("(提示:没有 EIA_API_KEY 或找不到 eia_mcp.py,本次只加载股票 tool)")
+        print("(warning:can't find EIA_API_KEY or eia_mcp.py,this tool will be unavailable)")
  
+    # 批发电价 server
+    wholesale_path = Path(WHOLESALE_MCP_DIR)
+    if (wholesale_path / "wholesale_mcp.py").exists():
+        servers["wholesale"] = _stdio_server(wholesale_path, "wholesale_mcp.py", {})
+    else:
+        print("(warning:can't find wholesale_mcp.py,this tool will be unavailable)")
+
     client = MultiServerMCPClient(servers)
     tools = await client.get_tools()
 

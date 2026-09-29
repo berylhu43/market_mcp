@@ -216,8 +216,9 @@ def get_news(
         list[str] | None,
         Field(
             default=None,
-            description=f"Optional list of topics. Must be from: {NEWS_TOPICS}. "
-            "For energy storage / grid / utilities news use 'energy_transportation'.",
+            description="Optional topic filter. Topics are broad and noisy — "
+            "'energy_transportation' returns airline and auto news too. Prefer "
+            f"tickers instead. Available: {NEWS_TOPICS}",
             max_length=3,
         ),
     ] = None,
@@ -227,8 +228,9 @@ def get_news(
     ] = 8,
 ) -> str:
     """Get recent news headlines with sentiment for companies and/or topics.
-    Pass tickers for company news, topics for sector/theme news, or both together.
-    At least one of tickers or topics is required."""
+    Prefer tickers for relevant results; topic filters are broad and return a lot
+    of unrelated news. Combining tickers and topics narrows results sharply and
+    often returns nothing."""
     if not tickers and not topics:
         return "需要至少给一个 tickers 或 topics。例如 tickers=['NRGV'] 或 topics=['energy_transportation']。"
  
